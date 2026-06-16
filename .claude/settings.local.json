@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(pip3 --version)",
+      "Bash(pip3 install *)",
+      "Bash(python3 *)",
+      "Bash(pip3 show *)",
+      "Read(//opt/homebrew/bin/**)",
+      "Bash(/opt/homebrew/bin/brew --version)",
+      "Read(//opt/**)",
+      "Read(//usr/local/bin/**)"
+    ]
+  }
+}
