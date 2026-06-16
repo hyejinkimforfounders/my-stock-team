@@ -62,10 +62,21 @@ _CORP_CACHE = None
 
 
 def _corp_records():
-    """DART 전체 매핑 다운로드/캐시 → [(corp_code, corp_name, stock_code), ...]."""
+    """상장사 매핑 → [(corp_code, corp_name, stock_code), ...].
+
+    동봉된 web/corp_map.json을 우선 사용(서버리스 콜드스타트 최적화).
+    없으면 DART corpCode.xml을 내려받아 파싱(로컬 갱신용).
+    """
     global _CORP_CACHE
     if _CORP_CACHE is not None:
         return _CORP_CACHE
+
+    cached = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corp_map.json")
+    if os.path.exists(cached):
+        with open(cached, encoding="utf-8") as f:
+            _CORP_CACHE = [tuple(r) for r in json.load(f)]
+        return _CORP_CACHE
+
     if not DART_KEY:
         raise RuntimeError("DART_API_KEY 미설정 (.env.local 확인)")
     url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={DART_KEY}"
@@ -161,7 +172,8 @@ def price_table(p):
 
 
 def price_comments(p):
-    out = []
+    out = [f"종가 {_won(p['last'])} ({p['chg_pct']:+.2f}%) · "
+           f"이평 5/20/60일 {p['ma5']:,.0f}/{p['ma20']:,.0f}/{p['ma60']:,.0f}원"]
     pos = []
     if p["last"] >= p["ma20"]:
         pos.append("20일선 위")
@@ -311,46 +323,53 @@ def opinion_bullets(p, f):
 
 
 # ──────────────────────────── 차트 이미지 ────────────────────────────
-def _writable_dir(preferred):
-    """preferred가 쓰기 가능하면 그걸, 아니면 임시 디렉터리(/tmp 등)를 반환."""
-    import tempfile
-    try:
-        os.makedirs(preferred, exist_ok=True)
-        testf = os.path.join(preferred, ".w")
-        with open(testf, "w") as fh:
-            fh.write("ok")
-        os.remove(testf)
-        return preferred
-    except Exception:
-        d = os.path.join(tempfile.gettempdir(), "my_stock_team")
-        os.makedirs(d, exist_ok=True)
-        return d
+def add_native_chart(slide, top, height, close_series):
+    """python-pptx 네이티브 라인차트(종가+60일 이평). matplotlib 불필요(서버리스 친화)."""
+    from pptx.chart.data import CategoryChartData
+    from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
+    from pptx.util import Pt
 
+    # 약 60개 포인트로 다운샘플 (가독성·용량)
+    n = len(close_series)
+    step = max(1, n // 60)
+    s = close_series.iloc[::step]
+    ma60 = close_series.rolling(60).mean().iloc[::step]
 
-def make_chart(ticker, name, close_series, asof):
-    # matplotlib 설정/캐시는 쓰기 가능한 곳으로 (Vercel 등 읽기전용 FS 대응)
-    os.environ.setdefault("MPLCONFIGDIR", _writable_dir(os.path.join(BASE, ".mplcache")))
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    charts_dir = _writable_dir(os.path.join(BASE, "assets", "charts"))
-    path = os.path.join(charts_dir, f"{ticker}.png")
-    fig, ax = plt.subplots(figsize=(11, 4.2), dpi=150)
-    ax.plot(close_series.index, close_series.values, color="#1F2A44", linewidth=1.6)
-    ma20 = close_series.rolling(20).mean()
-    ma60 = close_series.rolling(60).mean()
-    ax.plot(close_series.index, ma20.values, color="#F37321", linewidth=1.0, label="MA20")
-    ax.plot(close_series.index, ma60.values, color="#8A8A8A", linewidth=1.0, label="MA60")
-    ax.set_title(f"{ticker}  Close (1Y)  as of {asof}", fontsize=11)
-    ax.legend(loc="upper left", fontsize=8)
-    ax.grid(True, alpha=0.25)
-    fig.tight_layout()
-    fig.savefig(path)
-    plt.close(fig)
-    return path
+    cats = [d.strftime("%y/%m") for d in s.index]
+    cd = CategoryChartData()
+    cd.categories = cats
+    cd.add_series("종가", [round(float(v)) for v in s.values])
+    cd.add_series("60일 이평", [None if v != v else round(float(v)) for v in ma60.values])
+
+    gf = slide.shapes.add_chart(
+        XL_CHART_TYPE.LINE, bp.MARGIN_X, top, bp.USABLE_W, height, cd)
+    chart = gf.chart
+    chart.has_title = False
+    chart.has_legend = True
+    chart.legend.position = XL_LEGEND_POSITION.TOP
+    chart.legend.include_in_layout = False
+    chart.legend.font.size = Pt(10)
+    for plot in chart.plots:
+        plot.series[0].format.line.color.rgb = bp.NAVY
+        plot.series[0].format.line.width = Pt(1.75)
+        plot.series[1].format.line.color.rgb = bp.ORANGE
+        plot.series[1].format.line.width = Pt(1.0)
+    chart.category_axis.tick_labels.font.size = Pt(8)
+    chart.value_axis.tick_labels.font.size = Pt(8)
+    return top + height
 
 
 # ──────────────────────────── PPTX 조립 (build_pptx 헬퍼 재사용) ────────────────────────────
+def _render_blocks_from(slide, blocks, start_top):
+    """render_blocks를 지정한 y 좌표부터 렌더링(차트 아래 영역 채우기용)."""
+    saved = bp.BODY_TOP
+    try:
+        bp.BODY_TOP = int(start_top)
+        bp.render_blocks(slide, blocks)
+    finally:
+        bp.BODY_TOP = saved
+
+
 def _section_slide(prs, page, title, blocks):
     s = bp.blank_slide(prs)
     bp.add_title(s, title)
@@ -396,22 +415,19 @@ def build_report(query):
         fin_blocks.append(("source", "(출처: DART) — API 키 미설정 또는 해당 보고서 없음"))
     _section_slide(prs, 2, "재무", fin_blocks)
 
-    # 3. 차트
-    chart_blocks = []
+    # 3. 차트 (네이티브 라인차트 + 출처 + 코멘트)
+    from pptx.util import Inches
+    s3 = bp.blank_slide(prs)
+    bp.add_title(s3, "차트")
     if price:
-        try:
-            img = make_chart(ticker, name, price["close_series"], asof)
-            chart_blocks.append(("image", img))
-        except Exception:
-            pass
-        h, rows = price_table(price)
-        chart_blocks.append(("table", (h, rows)))
-        chart_blocks.append(("source", f"(출처: FinanceDataReader, 기준일: {price['last_date']})"))
-        for c in price_comments(price):
-            chart_blocks.append(("bullet", c))
+        y = add_native_chart(s3, Inches(1.45), Inches(3.1), price["close_series"])
+        blocks = [("source", f"(출처: FinanceDataReader, 기준일: {price['last_date']})")]
+        blocks += [("bullet", c) for c in price_comments(price)]
+        # 차트 아래부터 렌더링되도록 임시 시작점 조정
+        _render_blocks_from(s3, blocks, y + Inches(0.15))
     else:
-        chart_blocks.append(("para", f"시세 데이터를 확인하지 못했습니다: {price_err or '확인 불가'}"))
-    _section_slide(prs, 3, "차트", chart_blocks)
+        bp.render_blocks(s3, [("para", f"시세 데이터를 확인하지 못했습니다: {price_err or '확인 불가'}")])
+    bp.add_footer(s3, 3)
 
     # 4. 리스크
     risk_blocks = [("bullet", b) for b in risk_bullets(price, fin)]

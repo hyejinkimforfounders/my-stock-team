@@ -20,3 +20,4 @@ venv/
 
 # matplotlib 캐시
 .mplcache/
+.vercel

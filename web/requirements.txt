@@ -1,5 +1,4 @@
 Flask>=3.0
-FinanceDataReader>=0.9.50
+finance-datareader>=0.9.50
 python-pptx>=1.0
-matplotlib>=3.8
 certifi
