@@ -8,7 +8,7 @@
 데이터: DART(재무) + FinanceDataReader(시세). 키는 .env.local의 DART_API_KEY.
 가드레일: 매수/매도·목표가 미제시, 출처·기준일 병기, 학습용 명시(가드는 pipeline에 내장).
 """
-import os, traceback
+import os, base64, traceback
 from flask import (Flask, render_template, request, send_file,
                    jsonify, abort)
 
@@ -37,22 +37,14 @@ def generate():
     except Exception as e:                   # 예기치 못한 오류
         traceback.print_exc()
         return jsonify({"ok": False, "error": f"리포트 생성 중 오류: {e}"}), 500
+    # 서버리스 호환: 한 번의 요청으로 PPTX를 base64로 동봉(상태 비저장)
     return jsonify({
         "ok": True,
         "name": meta["name"], "ticker": meta["ticker"],
         "asof": meta["asof"], "filename": meta["filename"],
         "has_price": meta["has_price"], "has_fin": meta["has_fin"],
-        "download": "/download/" + meta["filename"],
+        "pptx_b64": base64.b64encode(meta["data"]).decode("ascii"),
     })
-
-
-@app.route("/download/<path:filename>")
-def download(filename):
-    out_dir = os.path.join(pipeline.BASE, "reports", "pptx")
-    path = os.path.join(out_dir, filename)
-    if not os.path.abspath(path).startswith(os.path.abspath(out_dir)) or not os.path.exists(path):
-        abort(404)
-    return send_file(path, as_attachment=True)
 
 
 if __name__ == "__main__":

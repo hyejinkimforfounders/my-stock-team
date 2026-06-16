@@ -95,6 +95,13 @@
     q.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
     go.addEventListener('click', run);
 
+    function b64toBlob(b64, type){
+      const bin = atob(b64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      return new Blob([bytes], { type });
+    }
+
     async function run(){
       const query = q.value.trim();
       if (!query){ q.focus(); return; }
@@ -116,10 +123,14 @@
           const px = data.has_price
             ? '<span class="badge ok">시세 ✓</span>'
             : '<span class="badge miss">시세 확인 불가</span>';
+          // base64 PPTX → Blob → 다운로드 URL (서버리스 호환, 상태 비저장)
+          const blob = b64toBlob(data.pptx_b64,
+            'application/vnd.openxmlformats-officedocument.presentationml.presentation');
+          const url = URL.createObjectURL(blob);
           resultEl.innerHTML = `
             <h3>${data.name} <span style="color:var(--gray);font-weight:400">(${data.ticker})</span></h3>
             <p class="meta">기준일 ${data.asof} · ${fin} ${px}</p>
-            <a class="dl" href="${data.download}">⬇ PPTX 다운로드</a>`;
+            <a class="dl" href="${url}" download="${data.filename}">⬇ PPTX 다운로드</a>`;
         }
         resultEl.style.display = 'block';
       } catch (err){

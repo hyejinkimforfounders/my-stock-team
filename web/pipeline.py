@@ -23,10 +23,15 @@ BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))   # 프로젝
 SKILL_DIR = os.path.join(BASE, ".claude", "skills", "report-pptx")
 
 # build_pptx 디자인 헬퍼 재사용
+# 배포(Vercel)용으로 web/build_pptx.py 동봉본을 우선 임포트, 없으면 스킬 원본 사용
 import sys
-if SKILL_DIR not in sys.path:
-    sys.path.insert(0, SKILL_DIR)
-import build_pptx as bp
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # web/
+try:
+    import build_pptx as bp
+except ImportError:
+    if SKILL_DIR not in sys.path:
+        sys.path.insert(0, SKILL_DIR)
+    import build_pptx as bp
 
 
 # ──────────────────────────── 환경/키 ────────────────────────────
@@ -306,12 +311,29 @@ def opinion_bullets(p, f):
 
 
 # ──────────────────────────── 차트 이미지 ────────────────────────────
+def _writable_dir(preferred):
+    """preferred가 쓰기 가능하면 그걸, 아니면 임시 디렉터리(/tmp 등)를 반환."""
+    import tempfile
+    try:
+        os.makedirs(preferred, exist_ok=True)
+        testf = os.path.join(preferred, ".w")
+        with open(testf, "w") as fh:
+            fh.write("ok")
+        os.remove(testf)
+        return preferred
+    except Exception:
+        d = os.path.join(tempfile.gettempdir(), "my_stock_team")
+        os.makedirs(d, exist_ok=True)
+        return d
+
+
 def make_chart(ticker, name, close_series, asof):
+    # matplotlib 설정/캐시는 쓰기 가능한 곳으로 (Vercel 등 읽기전용 FS 대응)
+    os.environ.setdefault("MPLCONFIGDIR", _writable_dir(os.path.join(BASE, ".mplcache")))
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    charts_dir = os.path.join(BASE, "assets", "charts")
-    os.makedirs(charts_dir, exist_ok=True)
+    charts_dir = _writable_dir(os.path.join(BASE, "assets", "charts"))
     path = os.path.join(charts_dir, f"{ticker}.png")
     fig, ax = plt.subplots(figsize=(11, 4.2), dpi=150)
     ax.plot(close_series.index, close_series.values, color="#1F2A44", linewidth=1.6)
@@ -400,16 +422,26 @@ def build_report(query):
     op_blocks.append(("para", "본 분석은 교육·학습 목적이며 투자 권유가 아닙니다."))
     _section_slide(prs, 5, "종합의견", op_blocks)
 
-    # 저장
-    out_dir = os.path.join(BASE, "reports", "pptx")
-    os.makedirs(out_dir, exist_ok=True)
+    # 메모리로 저장(서버리스 호환) + 로컬은 best-effort 디스크 저장
     fname = f"{name}_{asof.isoformat()}.pptx"
-    path = os.path.join(out_dir, fname)
-    prs.save(path)
+    buf = io.BytesIO()
+    prs.save(buf)
+    data = buf.getvalue()
+
+    path = None
+    try:
+        out_dir = os.path.join(BASE, "reports", "pptx")
+        os.makedirs(out_dir, exist_ok=True)
+        path = os.path.join(out_dir, fname)
+        with open(path, "wb") as fh:
+            fh.write(data)
+    except Exception:
+        path = None       # 읽기전용 FS(Vercel 등)면 디스크 저장 생략
 
     return {
-        "path": path, "filename": fname, "name": name, "ticker": ticker,
-        "corp_code": corp_code, "asof": asof.isoformat(),
+        "path": path, "filename": fname, "data": data,
+        "name": name, "ticker": ticker, "corp_code": corp_code,
+        "asof": asof.isoformat(),
         "has_price": price is not None, "has_fin": fin is not None,
     }
 
@@ -417,4 +449,5 @@ def build_report(query):
 if __name__ == "__main__":
     import sys
     q = sys.argv[1] if len(sys.argv) > 1 else "삼성전자"
-    print(build_report(q))
+    m = build_report(q)
+    print({k: (f"<{len(v)} bytes>" if k == "data" else v) for k, v in m.items()})
