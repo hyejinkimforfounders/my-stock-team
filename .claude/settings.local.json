@@ -8,7 +8,11 @@
       "Read(//opt/homebrew/bin/**)",
       "Bash(/opt/homebrew/bin/brew --version)",
       "Read(//opt/**)",
-      "Read(//usr/local/bin/**)"
+      "Read(//usr/local/bin/**)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m ' *)",
+      "Bash(git push *)",
+      "Bash(FLASK_RUN=1 python3 -c ' *)"
     ]
   }
 }

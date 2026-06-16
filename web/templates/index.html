@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>my-stock-team · 투자 리포트 생성기</title>
+  <style>
+    :root{ --navy:#1F2A44; --orange:#F37321; --gray:#8A8A8A; --line:#E5E7EB; }
+    *{ box-sizing:border-box; }
+    body{ margin:0; font-family:"맑은 고딕","Malgun Gothic",-apple-system,system-ui,sans-serif;
+          background:#F4F5F7; color:#222; }
+    .bar{ height:6px; background:var(--orange); }
+    .wrap{ max-width:680px; margin:0 auto; padding:48px 20px 64px; }
+    h1{ color:var(--navy); font-size:30px; margin:0 0 6px; letter-spacing:-.5px; }
+    .sub{ color:var(--gray); margin:0 0 28px; font-size:15px; }
+    .card{ background:#fff; border:1px solid var(--line); border-radius:14px;
+           padding:26px; box-shadow:0 1px 3px rgba(0,0,0,.04); }
+    label{ font-weight:700; color:var(--navy); font-size:14px; }
+    .row{ display:flex; gap:10px; margin-top:10px; }
+    input[type=text]{ flex:1; padding:13px 15px; font-size:16px; border:1px solid #cfd3da;
+                      border-radius:10px; outline:none; }
+    input[type=text]:focus{ border-color:var(--navy); }
+    button{ padding:13px 22px; font-size:15px; font-weight:700; color:#fff;
+            background:var(--navy); border:none; border-radius:10px; cursor:pointer; }
+    button:hover{ background:#162038; }
+    button:disabled{ background:#9aa0ab; cursor:not-allowed; }
+    .chips{ margin-top:14px; display:flex; gap:8px; flex-wrap:wrap; }
+    .chip{ font-size:13px; color:var(--navy); background:#eef0f4; border:1px solid var(--line);
+           padding:6px 12px; border-radius:999px; cursor:pointer; }
+    .chip:hover{ background:#e3e7ee; }
+    .note{ font-size:12.5px; color:var(--gray); margin-top:18px; line-height:1.6; }
+    .warn{ color:#b45309; }
+    #status{ margin-top:22px; display:none; }
+    .spin{ display:inline-block; width:16px; height:16px; border:3px solid #d8dbe1;
+           border-top-color:var(--navy); border-radius:50%; animation:sp .8s linear infinite;
+           vertical-align:-3px; margin-right:8px; }
+    @keyframes sp{ to{ transform:rotate(360deg); } }
+    .result{ margin-top:22px; padding:20px; border:1px solid var(--line); border-radius:12px;
+             background:#fafbfc; display:none; }
+    .result h3{ margin:0 0 6px; color:var(--navy); }
+    .meta{ font-size:13px; color:var(--gray); margin:0 0 16px; }
+    .dl{ display:inline-block; background:var(--orange); color:#fff; text-decoration:none;
+         padding:12px 20px; border-radius:10px; font-weight:700; }
+    .dl:hover{ background:#d9651a; }
+    .err{ color:#b91c1c; font-weight:600; }
+    .badge{ font-size:12px; padding:3px 9px; border-radius:6px; margin-right:6px; }
+    .ok{ background:#dcfce7; color:#166534; }
+    .miss{ background:#fee2e2; color:#991b1b; }
+    .pipe{ margin-top:6px; font-size:13px; color:var(--gray); }
+  </style>
+</head>
+<body>
+  <div class="bar"></div>
+  <div class="wrap">
+    <h1>📊 my-stock-team</h1>
+    <p class="sub">종목명만 입력하면 애널리스트 팀의 데이터로 투자 리포트(PPTX)를 만들어 드립니다.</p>
+
+    <div class="card">
+      <label for="q">종목명 또는 6자리 코드</label>
+      <div class="row">
+        <input type="text" id="q" placeholder="예: 삼성전자  또는  005930" autocomplete="off">
+        <button id="go">리포트 생성</button>
+      </div>
+      <div class="chips">
+        <span class="chip">삼성전자</span>
+        <span class="chip">SK하이닉스</span>
+        <span class="chip">현대차</span>
+        <span class="chip">카카오</span>
+        <span class="chip">NAVER</span>
+      </div>
+
+      <div id="status"><span class="spin"></span><span id="statusText">리포트를 생성하는 중입니다…</span>
+        <div class="pipe">재무(DART) · 시세(FinanceDataReader) 수집 → 5부 리포트 조립</div>
+      </div>
+
+      <div id="result" class="result"></div>
+
+      <p class="note">
+        구성: <b>표지 · 재무 · 차트 · 리스크 · 종합의견</b> 5부 · 16:9 PPTX<br>
+        {% if not dart_ok %}<span class="warn">⚠ DART_API_KEY 미설정 — 재무 섹션이 "확인 불가"로 표시됩니다 (.env.local 확인).</span><br>{% endif %}
+        ※ 본 도구는 <b>교육·학습용</b>이며 매수·매도 권유나 목표가를 제시하지 않습니다.
+      </p>
+    </div>
+  </div>
+
+  <script>
+    const q = document.getElementById('q');
+    const go = document.getElementById('go');
+    const statusEl = document.getElementById('status');
+    const resultEl = document.getElementById('result');
+
+    document.querySelectorAll('.chip').forEach(c =>
+      c.addEventListener('click', () => { q.value = c.textContent; q.focus(); }));
+
+    q.addEventListener('keydown', e => { if (e.key === 'Enter') run(); });
+    go.addEventListener('click', run);
+
+    async function run(){
+      const query = q.value.trim();
+      if (!query){ q.focus(); return; }
+      go.disabled = true;
+      resultEl.style.display = 'none';
+      statusEl.style.display = 'block';
+      try {
+        const fd = new FormData();
+        fd.append('query', query);
+        const res = await fetch('/generate', { method:'POST', body:fd });
+        const data = await res.json();
+        statusEl.style.display = 'none';
+        if (!data.ok){
+          resultEl.innerHTML = `<p class="err">⚠ ${data.error}</p>`;
+        } else {
+          const fin = data.has_fin
+            ? '<span class="badge ok">재무 ✓</span>'
+            : '<span class="badge miss">재무 확인 불가</span>';
+          const px = data.has_price
+            ? '<span class="badge ok">시세 ✓</span>'
+            : '<span class="badge miss">시세 확인 불가</span>';
+          resultEl.innerHTML = `
+            <h3>${data.name} <span style="color:var(--gray);font-weight:400">(${data.ticker})</span></h3>
+            <p class="meta">기준일 ${data.asof} · ${fin} ${px}</p>
+            <a class="dl" href="${data.download}">⬇ PPTX 다운로드</a>`;
+        }
+        resultEl.style.display = 'block';
+      } catch (err){
+        statusEl.style.display = 'none';
+        resultEl.innerHTML = `<p class="err">⚠ 요청 실패: ${err}</p>`;
+        resultEl.style.display = 'block';
+      } finally {
+        go.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
